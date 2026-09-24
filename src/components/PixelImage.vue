@@ -67,13 +67,82 @@
       <div class="settings-grid">
         <label class="range-control">
           <span><b>DEPTH</b><output>{{ depthStrength }}%</output></span>
-          <input v-model.number="depthStrength" type="range" min="1" max="100" step="1" @input="updateMaterial" />
+          <input v-model.number="depthStrength" type="range" min="1" max="100" step="1" aria-label="Depth strength" @input="updateMaterial" />
         </label>
         <label class="range-control">
           <span><b>POINT SIZE</b><output>{{ pointSize.toFixed(1) }}</output></span>
-          <input v-model.number="pointSize" type="range" min="0.5" max="4" step="0.1" @input="updateMaterial" />
+          <input v-model.number="pointSize" type="range" min="0.5" max="4" step="0.1" aria-label="Point size" @input="updateMaterial" />
+        </label>
+        <label class="range-control">
+          <span><b>BRIGHTNESS</b><output>{{ brightness }}%</output></span>
+          <input v-model.number="brightness" type="range" min="50" max="250" step="5" aria-label="Brightness" @input="updateMaterial" />
         </label>
       </div>
+
+      <section class="view-controls" aria-labelledby="view-controls-title">
+        <div class="section-heading">
+          <div>
+            <p id="view-controls-title" class="label-text">VIEW ANGLE</p>
+            <p class="section-note">Drag the cloud or enter an exact value</p>
+          </div>
+          <button class="reset-view-btn" type="button" :disabled="!isReady" @click="resetCameraView">
+            RESET
+          </button>
+        </div>
+
+        <div class="camera-grid">
+          <label class="number-control">
+            <span>AZIMUTH</span>
+            <span class="number-field">
+              <input
+                v-model.number="cameraAzimuth"
+                type="number"
+                step="0.1"
+                inputmode="decimal"
+                aria-label="Camera azimuth in degrees"
+                @focus="isEditingCamera = true"
+                @blur="commitCameraView"
+                @keydown.enter.prevent="$event.currentTarget.blur()"
+              />
+              <b>°</b>
+            </span>
+          </label>
+          <label class="number-control">
+            <span>ELEVATION</span>
+            <span class="number-field">
+              <input
+                v-model.number="cameraElevation"
+                type="number"
+                min="-89"
+                max="89"
+                step="0.1"
+                inputmode="decimal"
+                aria-label="Camera elevation in degrees"
+                @focus="isEditingCamera = true"
+                @blur="commitCameraView"
+                @keydown.enter.prevent="$event.currentTarget.blur()"
+              />
+              <b>°</b>
+            </span>
+          </label>
+          <label class="number-control">
+            <span>DISTANCE</span>
+            <span class="number-field">
+              <input
+                v-model.number="cameraDistance"
+                type="number"
+                min="1"
+                step="1"
+                inputmode="decimal"
+                aria-label="Camera distance"
+                @focus="isEditingCamera = true"
+                @blur="commitCameraView"
+                @keydown.enter.prevent="$event.currentTarget.blur()"
+              />
+            </span>
+          </label>
+        </div>
+      </section>
 
       <div class="action-row">
         <button class="invert-btn" type="button" :class="{ active: invertDepth }" :disabled="!hasDepth" @click="toggleDepthInvert">
@@ -132,11 +201,13 @@ const vertexShader = `
 const fragmentShader = `
   precision highp float;
   uniform sampler2D uColorTexture;
+  uniform float uBrightness;
   varying vec2 vUv;
 
   void main() {
     vec4 color = texture2D(uColorTexture, vUv);
     if (color.a < 0.1) discard;
+    color.rgb *= uBrightness;
     gl_FragColor = color;
   }
 `
@@ -154,11 +225,16 @@ const renderHeight = ref(0)
 const pointCount = ref(0)
 const depthStrength = ref(35)
 const pointSize = ref(1.5)
+const brightness = ref(125)
 const invertDepth = ref(false)
 const exportFormat = ref('png')
 const message = ref('')
 const hasError = ref(false)
 const depthWasResampled = ref(false)
+const cameraAzimuth = ref(0)
+const cameraElevation = ref(0)
+const cameraDistance = ref(1000)
+const isEditingCamera = ref(false)
 const isReady = computed(() => hasColor.value && hasDepth.value && !!particlesMesh)
 const isPanelOpen = ref(true)
 const isDragging = ref(false)
@@ -281,6 +357,69 @@ let depthTexture
 let colorPixels
 let depthPixels
 
+const radiansToDegrees = (value) => value * 180 / Math.PI
+const degreesToRadians = (value) => value * Math.PI / 180
+const roundViewValue = (value) => Math.round(value * 10) / 10
+const normalizeAngle = (value) => {
+  const normalized = ((value + 180) % 360 + 360) % 360 - 180
+  return roundViewValue(normalized)
+}
+
+const syncCameraView = () => {
+  if (!controls || !camera || isEditingCamera.value) return
+  cameraAzimuth.value = normalizeAngle(radiansToDegrees(controls.getAzimuthalAngle()))
+  cameraElevation.value = roundViewValue(90 - radiansToDegrees(controls.getPolarAngle()))
+  cameraDistance.value = roundViewValue(camera.position.distanceTo(controls.target))
+}
+
+const applyCameraView = () => {
+  if (!controls || !camera) return
+
+  const azimuth = Number(cameraAzimuth.value)
+  const elevation = Number(cameraElevation.value)
+  const distance = Number(cameraDistance.value)
+  cameraAzimuth.value = normalizeAngle(Number.isFinite(azimuth) ? azimuth : 0)
+  cameraElevation.value = roundViewValue(clamp(Number.isFinite(elevation) ? elevation : 0, -89, 89))
+  cameraDistance.value = roundViewValue(clamp(
+    Number.isFinite(distance) ? distance : controls.getDistance(),
+    controls.minDistance,
+    controls.maxDistance
+  ))
+
+  const spherical = new THREE.Spherical(
+    cameraDistance.value,
+    degreesToRadians(90 - cameraElevation.value),
+    degreesToRadians(cameraAzimuth.value)
+  )
+  const dampingWasEnabled = controls.enableDamping
+  controls.enableDamping = false
+  controls.update()
+  camera.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(spherical))
+  camera.lookAt(controls.target)
+  controls.update()
+  controls.enableDamping = dampingWasEnabled
+  syncCameraView()
+}
+
+const commitCameraView = () => {
+  applyCameraView()
+  isEditingCamera.value = false
+  syncCameraView()
+}
+
+const resetCameraView = () => {
+  if (!controls || !camera) return
+  const maxDimension = Math.max(renderWidth.value, renderHeight.value, 1)
+  const dampingWasEnabled = controls.enableDamping
+  controls.enableDamping = false
+  controls.update()
+  camera.position.set(maxDimension * 0.65, maxDimension * 0.3, maxDimension * 1.25)
+  controls.target.set(0, 0, 0)
+  controls.update()
+  controls.enableDamping = dampingWasEnabled
+  syncCameraView()
+}
+
 const loadImage = (src) => new Promise((resolve, reject) => {
   const image = new Image()
   image.onload = () => resolve(image)
@@ -391,7 +530,8 @@ const rebuildPointCloud = async (resetView = true) => {
         uDepthTexture: { value: depthTexture },
         uDepthScale: { value: Math.max(width, height) * depthStrength.value / 100 },
         uInvertDepth: { value: invertDepth.value ? 1 : 0 },
-        uPointSize: { value: pointSize.value * Math.min(window.devicePixelRatio, 2) }
+        uPointSize: { value: pointSize.value * Math.min(window.devicePixelRatio, 2) },
+        uBrightness: { value: brightness.value / 100 }
       },
       vertexShader,
       fragmentShader,
@@ -414,9 +554,9 @@ const rebuildPointCloud = async (resetView = true) => {
     controls.minDistance = Math.max(10, maxDimension * 0.1)
     controls.maxDistance = maxDimension * 8
     if (resetView) {
-      camera.position.set(maxDimension * 0.65, maxDimension * 0.3, maxDimension * 1.25)
-      controls.target.set(0, 0, 0)
-      controls.update()
+      resetCameraView()
+    } else {
+      applyCameraView()
     }
 
     message.value = mismatch
@@ -434,6 +574,7 @@ const updateMaterial = () => {
   if (!particlesMesh) return
   particlesMesh.material.uniforms.uDepthScale.value = Math.max(renderWidth.value, renderHeight.value) * depthStrength.value / 100
   particlesMesh.material.uniforms.uPointSize.value = pointSize.value * Math.min(window.devicePixelRatio, 2)
+  particlesMesh.material.uniforms.uBrightness.value = brightness.value / 100
 }
 
 const toggleDepthInvert = () => {
@@ -450,7 +591,7 @@ const handleColorUpload = async (event) => {
     colorImage = await loadImage(await readFile(file))
     colorFileName.value = file.name
     hasColor.value = true
-    await rebuildPointCloud()
+    await rebuildPointCloud(false)
   } catch (error) {
     hasError.value = true
     message.value = error.message
@@ -466,7 +607,7 @@ const handleDepthUpload = async (event) => {
     depthImage = await loadImage(await readFile(file))
     depthFileName.value = file.name
     hasDepth.value = true
-    await rebuildPointCloud()
+    await rebuildPointCloud(false)
   } catch (error) {
     hasError.value = true
     message.value = error.message
@@ -569,6 +710,8 @@ const initScene = () => {
   controls.dampingFactor = 0.06
   controls.rotateSpeed = 0.45
   controls.screenSpacePanning = true
+  controls.addEventListener('change', syncCameraView)
+  syncCameraView()
 }
 
 const animate = () => {
@@ -613,6 +756,7 @@ onUnmounted(() => {
   disposeCloud()
   colorTexture?.dispose()
   depthTexture?.dispose()
+  controls?.removeEventListener('change', syncCameraView)
   controls?.dispose()
   renderer?.dispose()
 })
@@ -635,8 +779,8 @@ onUnmounted(() => {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 70% 35%, transparent 0 20%, rgba(7, 10, 12, 0.2) 65%),
-    linear-gradient(90deg, rgba(7, 10, 12, 0.55), transparent 48%);
+  background: radial-gradient(circle at 70% 35%, transparent 0 24%, rgba(7, 10, 12, 0.08) 72%),
+    linear-gradient(90deg, rgba(7, 10, 12, 0.24), transparent 46%);
 }
 
 .webgl-canvas {
@@ -735,6 +879,8 @@ onUnmounted(() => {
 .file-state,
 .status-indicator,
 .range-control span,
+.number-control,
+.section-note,
 .cloud-meta,
 .hint,
 .message {
@@ -877,8 +1023,8 @@ input[type='file'] {
 
 .settings-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
   margin: 20px 0;
 }
 
@@ -901,6 +1047,101 @@ input[type='range'] {
   height: 2px;
   accent-color: #1d1d1d;
   cursor: pointer;
+}
+
+.view-controls {
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid #dddddd;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.section-heading .label-text {
+  margin: 0 0 3px;
+  color: #343434;
+}
+
+.section-note {
+  margin: 0;
+  color: #949494;
+  font-size: 8px;
+}
+
+.reset-view-btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #d2d2d2;
+  background: #ffffff;
+  color: #555555;
+  cursor: pointer;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+
+.reset-view-btn:hover:not(:disabled) {
+  border-color: #999999;
+  color: #111111;
+}
+
+.camera-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.number-control {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #777777;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+
+.number-field {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 34px;
+  overflow: hidden;
+  border: 1px solid #d8d8d8;
+  border-radius: 9px;
+  background: #ffffff;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.number-field:focus-within {
+  border-color: #777777;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.07);
+}
+
+.number-field input {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0 3px 0 9px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #222222;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+}
+
+.number-field b {
+  padding-right: 8px;
+  color: #888888;
+  font-size: 10px;
+  font-weight: 400;
 }
 
 .action-row {
