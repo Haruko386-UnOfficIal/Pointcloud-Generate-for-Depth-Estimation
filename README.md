@@ -27,7 +27,9 @@ Pointcloud Generate for Depth Esetimation is a browser-based tool for reconstruc
 - Samples color and depth at the exact center of each pixel.
 - Accepts an RGB or RGBA original image and a grayscale depth map.
 - Aligns a differently sized depth map to the original image dimensions and reports when resampling occurs.
-- Provides real-time orbit, pan, zoom, depth-strength, point-size, and depth-inversion controls.
+- Provides real-time orbit, pan, zoom, depth-strength, point-size, brightness, and depth-inversion controls.
+- Shows exact camera azimuth, elevation, and distance values, with synchronized mouse and numeric input control.
+- Preserves the active camera view when replacing an image or depth map for consistent comparisons.
 - Uses a draggable floating control dot that opens or collapses the rounded monochrome control panel.
 - Exports the current preview camera view as a PNG by default.
 - Exports the reconstructed point cloud as a binary little-endian PLY file when selected.
@@ -67,15 +69,16 @@ Open `http://localhost:5173` in a browser.
 2. Select the corresponding grayscale depth map.
 3. Drag the floating dot to place the controls anywhere on screen, or click it to open and collapse the panel.
 4. Drag the point cloud to rotate, right-drag to pan, and scroll to zoom.
-5. Adjust **Depth**, **Point Size**, or **Invert Depth** as needed.
-6. Keep **Current view (PNG)** selected and click **Export** to save exactly the view currently shown in the preview.
-7. Select **Point cloud (PLY)** before clicking **Export** if you need the reusable 3D point data instead.
+5. Adjust **Depth**, **Point Size**, **Brightness**, or **Invert Depth** as needed.
+6. Record or enter **Azimuth**, **Elevation**, and **Distance** when you need to reproduce an exact view. Mouse rotation and zoom update these values automatically; **Reset** restores the default view.
+7. Keep **Current view (PNG)** selected and click **Export** to save exactly the view currently shown in the preview.
+8. Select **Point cloud (PLY)** before clicking **Export** if you need the reusable 3D point data instead.
 
 ## Export Formats
 
 ### PNG
 
-The default export captures the active WebGL canvas, including the current camera angle, pan, zoom, point size, depth strength, and depth direction.
+The default export captures the active WebGL canvas, including the current camera angle, pan, zoom, brightness, point size, depth strength, and depth direction.
 
 ### PLY
 
